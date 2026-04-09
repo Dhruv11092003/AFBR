@@ -1,44 +1,41 @@
-from dataclasses import dataclass
-from datetime import datetime
+from __future__ import annotations
 
-
-@dataclass
-class LogEntry:
-    transaction_id: int
-    risk_score: float
-    threshold: float
-    decision: str
-    friction_level: str
-    user_action: str
-    override: int
-    personality: str
-    negotiation_message: str
-    reason: str
-    timestamp: datetime
+from datetime import datetime, timezone
 
 
 class LoggingAgent:
-    """Persists outcomes for closed-loop learning and auditability."""
+    """Writes transactions and behavioral outcomes into MongoDB collections."""
 
-    def log(self, conn, entry: LogEntry) -> None:
-        conn.execute(
-            """
-            INSERT INTO decisions (
-                transaction_id, risk_score, threshold, decision, friction_level,
-                user_action, override, personality, negotiation_message, reason, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                entry.transaction_id,
-                entry.risk_score,
-                entry.threshold,
-                entry.decision,
-                entry.friction_level,
-                entry.user_action,
-                entry.override,
-                entry.personality,
-                entry.negotiation_message,
-                entry.reason,
-                entry.timestamp.isoformat(),
-            ),
-        )
+    def log_transaction(self, transactions_collection, payload: dict) -> str:
+        doc = {
+            "amount": float(payload["amount"]),
+            "category": payload["category"],
+            "timestamp": payload["timestamp"],
+            "remaining_budget": float(payload["remaining_budget"]),
+        }
+        result = transactions_collection.insert_one(doc)
+        return str(result.inserted_id)
+
+    def log_behavior(
+        self,
+        behavior_collection,
+        transaction_id: str,
+        lcpi_score: float,
+        decision: str,
+        override: bool,
+        friction_level: str,
+        threshold: float,
+        reason: str,
+    ) -> str:
+        doc = {
+            "transaction_id": transaction_id,
+            "lcpi_score": float(lcpi_score),
+            "decision": decision,
+            "override": bool(override),
+            "friction_level": friction_level,
+            "threshold": float(threshold),
+            "reason": reason,
+            "timestamp": datetime.now(timezone.utc),
+        }
+        result = behavior_collection.insert_one(doc)
+        return str(result.inserted_id)

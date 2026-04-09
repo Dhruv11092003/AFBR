@@ -3,7 +3,7 @@ from datetime import datetime
 
 
 @dataclass
-class TransactionInput:
+class TransactionPayload:
     amount: float
     category: str
     remaining_budget: float
@@ -11,12 +11,12 @@ class TransactionInput:
 
 
 class TransactionAgent:
-    """Collects and normalizes transaction details."""
+    """Collects transaction details and normalizes values for downstream agents."""
 
-    def collect(self, amount: float, category: str, remaining_budget: float, timestamp: datetime) -> TransactionInput:
-        return TransactionInput(
-            amount=max(amount, 0.0),
+    def collect(self, amount: float, category: str, remaining_budget: float, timestamp: datetime) -> TransactionPayload:
+        return TransactionPayload(
+            amount=max(0.0, float(amount)),
             category=category.strip().lower(),
-            remaining_budget=max(remaining_budget, 1e-6),
+            remaining_budget=max(1.0, float(remaining_budget)),
             timestamp=timestamp,
         )

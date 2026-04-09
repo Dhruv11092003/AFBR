@@ -2,49 +2,35 @@ import os
 
 from openai import OpenAI
 
-from .behavior_agent import BehaviorFeatures
-
 
 class NegotiationAgent:
-    """Generates negotiation prompts using LLM (or deterministic fallback)."""
-
-    STYLE_MAP = {
-        "Impulsive": "firm, concise, consequence-focused",
-        "Risky": "analytical, risk-aware, direct",
-        "Planned": "supportive, planning-oriented",
-        "Goal-Oriented": "motivational, goal-protection-focused",
-    }
+    """Generates negotiation prompts before confirmation using LLM/fallback."""
 
     def __init__(self) -> None:
-        self.api_key = os.getenv("OPENAI_API_KEY", "")
-        self.client = OpenAI(api_key=self.api_key) if self.api_key else None
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        self.client = OpenAI(api_key=api_key) if api_key else None
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
-    def generate(self, personality: str, amount: float, category: str, features: BehaviorFeatures) -> str:
-        style = self.STYLE_MAP.get(personality, "balanced")
-
-        fallback_message = (
-            f"Before you confirm this ${amount:.2f} {category} transaction: "
-            "consider a 24-hour goal delay, review liquidity impact on weekly essentials, "
-            "shift part of this spend into a safer category budget, and compare one cheaper alternative."
+    def generate_message(self, category: str, amount: float, remaining_budget: float, lcpi_score: float) -> str:
+        fallback = (
+            f"This ${amount:.2f} {category} purchase has risk score {lcpi_score:.2f}. "
+            "Try a 24-hour delay, check liquidity impact on upcoming essentials, "
+            "and consider a lower-cost alternative before final confirmation."
         )
-
-        if not self.client:
-            return fallback_message
+        if self.client is None:
+            return fallback
 
         prompt = (
-            "You are a negotiation agent in an agentic AI spending regulator. "
-            f"User personality: {personality}. Tone: {style}. "
-            f"Transaction: ${amount:.2f} in {category}. LCPI risk score: {features.lcpi_score:.2f}. "
-            "Create a short negotiation with exactly four bullets covering: goal delay, liquidity impact, "
-            "budget redistribution, and alternative suggestion."
+            "You are AFBR's Negotiation Agent. Give concise, human-centered pre-confirmation guidance. "
+            "Return 3 bullet points only: (1) goal delay idea, (2) liquidity impact note, (3) practical alternative. "
+            f"Transaction category={category}, amount={amount:.2f}, remaining_budget={remaining_budget:.2f}, lcpi={lcpi_score:.2f}."
         )
-
         try:
             response = self.client.responses.create(
-                model="gpt-4.1-mini",
+                model=self.model,
                 input=prompt,
-                max_output_tokens=180,
+                max_output_tokens=160,
             )
-            return response.output_text.strip() or fallback_message
+            return (response.output_text or fallback).strip()
         except Exception:
-            return fallback_message
+            return fallback

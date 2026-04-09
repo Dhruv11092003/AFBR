@@ -1,44 +1,119 @@
+"""
+agents/threshold_agent.py
+─────────────────────────
+Agent 7 – Adaptive Threshold Agent
+Responsibility: Adjust the intervention threshold dynamically based on
+closed-loop behavioral feedback from MongoDB behavior_logs.
+
+This closes the feedback loop:
+  User behavior → LoggingAgent → MongoDB
+  → AdaptiveThresholdAgent reads stats → updates threshold
+  → DecisionAgent uses updated threshold next time
+"""
+
+from dataclasses import dataclass
+
+
+@dataclass
+class ThresholdUpdate:
+    old_threshold: float
+    new_threshold: float
+    compliance_rate: float
+    override_rate: float
+    avg_risk: float
+    adjustment_applied: float
+
+
+_DEFAULT_THRESHOLD = 0.55
+_MIN_THRESHOLD = 0.35
+_MAX_THRESHOLD = 0.85
+
+
 class AdaptiveThresholdAgent:
-    """Updates risk threshold from logged behavior (closed-loop feedback)."""
+    """
+    Dynamically adjusts the LCPI intervention threshold.
 
-    @staticmethod
-    def get_current_threshold(settings_collection) -> float:
-        doc = settings_collection.find_one({"key": "risk_threshold"})
-        if not doc:
-            settings_collection.update_one(
-                {"key": "risk_threshold"},
-                {"$set": {"key": "risk_threshold", "value": 0.55}},
-                upsert=True,
-            )
-            return 0.55
-        return float(doc.get("value", 0.55))
+    Logic
+    -----
+    - High override rate  → raise threshold (user resists intervention; avoid fatigue)
+    - Low override rate   → lower threshold (user compliant; catch more risky tx)
+    - High compliance     → raise slightly  (reward good behaviour)
+    - Low compliance      → lower slightly  (increase vigilance)
+    - High avg risk       → lower slightly  (user is genuinely high-risk)
+    """
 
-    def adapt_threshold(self, behavior_logs_collection, settings_collection) -> float:
-        logs = list(behavior_logs_collection.find().sort("timestamp", -1).limit(50))
-        if not logs:
-            return self.get_current_threshold(settings_collection)
+    def update(
+        self,
+        old_threshold: float,
+        compliance_rate: float,
+        override_rate: float,
+        avg_risk: float,
+    ) -> ThresholdUpdate:
+        """
+        Compute the new threshold.
 
-        override_rate = sum(1 for l in logs if l.get("override")) / len(logs)
-        defer_rate = sum(1 for l in logs if l.get("decision") == "defer") / len(logs)
-        avg_lcpi = sum(float(l.get("lcpi_score", 0.0)) for l in logs) / len(logs)
+        Parameters
+        ----------
+        old_threshold   : Previous threshold value.
+        compliance_rate : Fraction of interventions that were NOT overridden.
+        override_rate   : Fraction of interventions that were overridden.
+        avg_risk        : Mean LCPI score across all logged transactions.
 
-        current = self.get_current_threshold(settings_collection)
-        updated = current
+        Returns
+        -------
+        ThresholdUpdate dataclass.
+        """
+        adjustment = 0.0
 
-        if override_rate > 0.5:
-            updated += 0.03
-        elif override_rate < 0.2:
-            updated -= 0.02
+        # Override behaviour
+        if override_rate > 0.45:
+            adjustment += 0.03   # user ignores warnings → reduce alert fatigue
+        elif override_rate < 0.20:
+            adjustment -= 0.02   # user rarely overrides → can afford stricter threshold
 
-        if defer_rate > 0.35:
-            updated += 0.01
-        if avg_lcpi > 0.75:
-            updated -= 0.01
+        # Compliance behaviour
+        if compliance_rate > 0.75:
+            adjustment += 0.015  # strong compliance → reward with slightly easier threshold
+        elif compliance_rate < 0.45:
+            adjustment -= 0.015  # poor compliance → tighten threshold
 
-        updated = float(min(max(updated, 0.35), 0.85))
-        settings_collection.update_one(
-            {"key": "risk_threshold"},
-            {"$set": {"key": "risk_threshold", "value": updated}},
-            upsert=True,
+        # Absolute risk level
+        if avg_risk > 0.70:
+            adjustment -= 0.01   # user is genuinely high-risk → be more proactive
+
+        new_threshold = round(
+            min(max(old_threshold + adjustment, _MIN_THRESHOLD), _MAX_THRESHOLD),
+            4,
         )
-        return updated
+
+        return ThresholdUpdate(
+            old_threshold=old_threshold,
+            new_threshold=new_threshold,
+            compliance_rate=compliance_rate,
+            override_rate=override_rate,
+            avg_risk=avg_risk,
+            adjustment_applied=round(adjustment, 4),
+        )
+
+    def get_current_threshold(self, default: float = _DEFAULT_THRESHOLD) -> float:
+        """
+        Read the latest adaptive threshold from MongoDB behavior_logs.
+        Falls back to `default` if no logs exist.
+        """
+        try:
+            from database.mongo_client import get_adaptive_stats, get_behavior_logs_collection
+            col = get_behavior_logs_collection()
+            # Use the most recently stored threshold as the base
+            last = col.find_one({}, {"threshold": 1}, sort=[("timestamp", -1)])
+            base = last["threshold"] if last and "threshold" in last else default
+
+            stats = get_adaptive_stats()
+            update = self.update(
+                old_threshold=base,
+                compliance_rate=stats["compliance_rate"],
+                override_rate=stats["override_rate"],
+                avg_risk=stats["avg_risk"],
+            )
+            return update.new_threshold
+        except Exception:
+            return default

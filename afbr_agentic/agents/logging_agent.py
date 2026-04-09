@@ -1,41 +1,65 @@
-from __future__ import annotations
+"""
+agents/logging_agent.py
+───────────────────────
+Agent 6 – Logging Agent
+Responsibility: Persist all behavioral outcomes to MongoDB.
+This data feeds the closed-loop feedback system via AdaptiveThresholdAgent.
+"""
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass
+class LogEntry:
+    transaction_id: str
+    risk_score: float
+    threshold: float
+    decision: str           # "proceed" | "modify" | "defer"
+    friction_level: str     # "None" | "Low" | "Medium" | "High"
+    user_action: str        # final action taken
+    override: bool          # True if user overrode a high-risk flag
+    personality: str        # user personality label
+    negotiation_message: str
+    reason: str             # user-provided reason (for high friction)
+    timestamp: datetime
 
 
 class LoggingAgent:
-    """Writes transactions and behavioral outcomes into MongoDB collections."""
+    """
+    Persists transaction outcomes to MongoDB behavior_logs collection.
 
-    def log_transaction(self, transactions_collection, payload: dict) -> str:
-        doc = {
-            "amount": float(payload["amount"]),
-            "category": payload["category"],
-            "timestamp": payload["timestamp"],
-            "remaining_budget": float(payload["remaining_budget"]),
-        }
-        result = transactions_collection.insert_one(doc)
-        return str(result.inserted_id)
+    The log entries form the closed-loop dataset consumed by
+    AdaptiveThresholdAgent to dynamically adjust intervention thresholds.
+    """
 
-    def log_behavior(
-        self,
-        behavior_collection,
-        transaction_id: str,
-        lcpi_score: float,
-        decision: str,
-        override: bool,
-        friction_level: str,
-        threshold: float,
-        reason: str,
-    ) -> str:
-        doc = {
-            "transaction_id": transaction_id,
-            "lcpi_score": float(lcpi_score),
-            "decision": decision,
-            "override": bool(override),
-            "friction_level": friction_level,
-            "threshold": float(threshold),
-            "reason": reason,
-            "timestamp": datetime.now(timezone.utc),
-        }
-        result = behavior_collection.insert_one(doc)
-        return str(result.inserted_id)
+    def log(self, entry: LogEntry) -> bool:
+        """
+        Write a LogEntry to MongoDB.
+
+        Parameters
+        ----------
+        entry : Fully populated LogEntry dataclass.
+
+        Returns
+        -------
+        True on success, False on error.
+        """
+        try:
+            from database.mongo_client import insert_behavior_log
+
+            insert_behavior_log(
+                lcpi_score=entry.risk_score,
+                decision=entry.decision,
+                override=entry.override,
+                friction_level=entry.friction_level,
+                timestamp=entry.timestamp,
+                transaction_id=entry.transaction_id,
+                reason=entry.reason,
+                personality=entry.personality,
+                threshold=entry.threshold,
+            )
+            return True
+        except Exception as exc:
+            print(f"[LoggingAgent] Failed to write log: {exc}")
+            return False

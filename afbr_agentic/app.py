@@ -2,17 +2,10 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from pathlib import Path
-import sys
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
-
-# Ensure imports work whether Streamlit is launched from repo root or afbr_agentic/ directory.
-REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from afbr_agentic.agents.behavior_agent import BehaviorAnalysisAgent
 from afbr_agentic.agents.decision_agent import DecisionAgent
